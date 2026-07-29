@@ -1,0 +1,7 @@
+services:
+  kafka:
+    image: apache/kafka:4.1.1
+    container_name: kafka
+    working_dir: /opt/kafka/bin/
+    ports:
+      - "9092:9092"
