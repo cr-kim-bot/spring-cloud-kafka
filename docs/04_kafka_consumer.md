@@ -53,3 +53,100 @@
 
 - 토픽에 저장된 **모든 기존 메시지**를 처음부터 수신
 - 이후 새로 도착하는 메시지도 계속 수신
+
+# 다중 컨슈머 동작
+
+컨슈머를 여러 개 실행하면, **모든 컨슈머가 동일한 메시지를 전부 수신**한다.
+
+## 동작이 올바른 경우 — 서로 다른 마이크로서비스
+
+```
+order-events → Payment Service   (모든 이벤트 수신)
+             → Inventory Service (모든 이벤트 수신)
+```
+
+서로 다른 서비스가 동일 토픽을 각각 구독하는 경우, 모든 이벤트를 받아야 하므로 올바른 동작이다.
+
+## 동작이 올바르지 않은 경우 — 동일 서비스의 다중 인스턴스
+
+```
+order-events → Payment Service Instance 1 ┐ 동일 메시지 → 중복 처리 발생
+             → Payment Service Instance 2 ┘
+```
+
+부하 분산을 위해 동일 서비스를 여러 인스턴스로 실행할 때, 모든 인스턴스가 같은 메시지를 받으면 중복 처리가 발생한다. 이를 해결하는 것이 **Consumer Group**이다.
+
+# Consumer Group
+
+## 문제 상황
+
+프로덕션 환경에서는 부하 분산을 위해 동일 서비스를 여러 인스턴스로 실행한다.
+
+```
+order-events → Inventory Instance 1 ┐
+             → Inventory Instance 2 ├ 모두 동일 메시지 수신 → 중복 처리 발생
+             → Inventory Instance 3 ┘
+```
+
+원하는 동작: 인스턴스 중 **하나만** 이벤트를 수신하여 처리
+
+## 해결책: Consumer Group
+
+컨슈머 시작 시 `--group` 옵션으로 그룹명을 지정하면, Kafka 브로커가 같은 그룹의 컨슈머들을 **하나의 논리적 컨슈머**로 인식한다.
+
+- **같은 그룹**: 메시지를 인스턴스 간에 분담 처리 (중복 없음)
+- **다른 그룹**: 각 그룹이 모든 메시지를 독립적으로 수신
+
+```
+order-events ─┬─ group: inventory-service → Instance 1, 2, 3이 메시지 분담
+              └─ group: payment-service   → Instance 1, 2가 메시지 분담
+```
+
+각 그룹은 서로 다른 서비스를 대표하므로, 그룹 간에는 메시지가 공유되지 않고 각자 전체를 수신한다.
+
+## 데모
+
+### 클린 상태로 Kafka 재시작
+
+```bash
+docker compose down
+docker compose up
+```
+
+```bash
+./kafka-topics.sh --bootstrap-server localhost:9092 --create --topic demo-topic
+```
+
+### 서로 다른 그룹으로 컨슈머 2개 실행
+
+```bash
+# 터미널 1 — payment-service 그룹
+./kafka-console-consumer.sh \
+  --bootstrap-server localhost:9092 \
+  --topic demo-topic \
+  --property print.offset=true \
+  --group payment-service
+
+# 터미널 2 — inventory-service 그룹
+./kafka-console-consumer.sh \
+  --bootstrap-server localhost:9092 \
+  --topic demo-topic \
+  --property print.offset=true \
+  --group inventory-service
+```
+
+두 컨슈머 모두 모든 메시지를 수신한다 (서로 다른 그룹이므로 독립적).
+
+### 프로듀서 시작
+
+```bash
+./kafka-console-producer.sh \
+  --bootstrap-server localhost:9092 \
+  --topic demo-topic
+```
+
+### 컨슈머 그룹 목록 조회
+
+```bash
+./kafka-consumer-groups.sh --bootstrap-server localhost:9092 --list
+```
